@@ -5,9 +5,11 @@
 
 #define SERIAL_RATE       9600
 #define DS18020_PIN       4
+#define FREEZER_PIN       13
 #define ENCODER_LEFT_PIN  2
 #define ENCODER_RIGHT_PIN 3
 #define TEMPERATURE_STEP  0.1f
+#define RETENTION         1.0f   // 1 degree
 #define LEFT              true
 #define RIGHT             false
 #define PRIO_MAX          3
@@ -35,9 +37,15 @@ void setup(void)
   Serial.begin(SERIAL_RATE);
   Serial.println("Dallas Temperature Control Library Demo - TwoPin_DS18B20");
   sensor.begin();
+  setupFreezer();
   createSemaphores();
   createTasks();
   createInterrupts();
+}
+
+void setupFreezer() {
+  pinMode(FREEZER_PIN, OUTPUT);
+  digitalWrite(FREEZER_PIN, LOW);
 }
 
 void createSemaphores()
@@ -76,6 +84,11 @@ void taskUpdateTemperature(void* param __attribute__((unused)))
     Serial.println(currentTemperature);
     xSemaphoreGive(xSerialSemaphore);
   }
+  if (currentTemperature >= setupTemperature) {
+    digitalWrite(FREEZER_PIN, HIGH);
+  } else if (currentTemperature <= setupTemperature - RETENTION) {
+    digitalWrite(FREEZER_PIN, LOW);
+  }
   vTaskDelay( 1000 / portTICK_PERIOD_MS );
   TASK_END
 }
@@ -92,15 +105,15 @@ void handleInterrupted(boolean side)
   int rightPin = digitalRead(ENCODER_RIGHT_PIN);
   if (side == LEFT) {
     if ((leftPin == HIGH && rightPin == HIGH) || (leftPin == LOW && rightPin == LOW)) {
-      DECREASE; // <-
+      DECREASE; // - <- +
     } else {
-      INCREASE; // ->
+      INCREASE; // - -> +
     }
   } else {
     if ((leftPin == HIGH && rightPin == HIGH) || (leftPin == LOW && rightPin == LOW)) {
-      INCREASE; // ->
+      INCREASE; // - -> +
     } else {
-      DECREASE; // <-
+      DECREASE; // - <- +
     }
   }
 
