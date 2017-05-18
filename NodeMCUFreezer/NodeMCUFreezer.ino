@@ -8,24 +8,31 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define DISPLAY_RESET_PIN 15
-#define SERIAL_RATE       9600
-#define FREEZER_PIN       16
-#define DS18020_PIN       14
-#define ENCODER_LEFT_PIN  12
-#define ENCODER_RIGHT_PIN 13
-#define INCREASE          {setupTemperature += TEMPERATURE_STEP;}
-#define DECREASE          {setupTemperature -= TEMPERATURE_STEP;}
-#define TEMPERATURE_STEP  0.1f
-#define RETENTION         1.0f   // 1 degree
-#define UNREACHABLE       -274.0f
-#define LOW_LIMIT         -5.0f
+#define DISPLAY_RESET_PIN           15
+#define SERIAL_RATE                 9600
+#define FREEZER_PIN                 16
+#define DS18020_PIN                 14
+#define ENCODER_LEFT_PIN            12
+#define ENCODER_RIGHT_PIN           13
+#define INCREASE                    {setupTemperature += TEMPERATURE_STEP;}
+#define DECREASE                    {setupTemperature -= TEMPERATURE_STEP;}
+#define REQUEST_RENDER              {isRequestRender = true;}
+#define TEMPERATURE_STEP            0.1f
+#define RETENTION                   1.0f   // 1 degree
+#define UNREACHABLE                 -274.0f
+#define LOW_LIMIT                   -5.0f
+#define TEMPERATURE_INTERVAL        500
+#define ENCODER_MIN_DITHER_DURATION 3
+#define ENCODER_MAX_DITHER_DURATION 10
 
 const char *ssid     = "ESP_FREEZER";
 const char *password = "j989mik7!";
 
+long               updateTemperatureTime(0);
 volatile float     setupTemperature(UNREACHABLE);
 volatile float     currentTemperature(0);
+boolean            isRequestRender(true);
+volatile long      requestEncoderTime(0);
 OneWire            oneWire(DS18020_PIN);
 DallasTemperature  sensor(&oneWire);
 Adafruit_SSD1306   display(DISPLAY_RESET_PIN);
@@ -33,6 +40,8 @@ ESP8266WebServer server(80);
 
 void handleRoot();
 void handleInterrupted();
+void renderUI();
+void updateTemperature();
 
 void setup() {
   delay(1000);
@@ -57,59 +66,90 @@ void setup() {
   pinMode(ENCODER_RIGHT_PIN, INPUT_PULLUP);
   pinMode(FREEZER_PIN, OUTPUT);
   digitalWrite(FREEZER_PIN, LOW);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_PIN), handleInterrupted, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_PIN), handleInterrupted, RISING);
 }
 
 void loop() {
   server.handleClient();
-
-  // put your main code here, to run repeatedly:
-  sensor.requestTemperatures();
-  currentTemperature = sensor.getTempCByIndex(0);
-  if (setupTemperature <= UNREACHABLE) {
-    setupTemperature = currentTemperature;
-  }
-  if (currentTemperature >= setupTemperature) {
-    digitalWrite(FREEZER_PIN, HIGH);
-  } else if (currentTemperature <= setupTemperature - RETENTION) {
-    digitalWrite(FREEZER_PIN, LOW);
-  }
-  
-  Serial.print("Temperatures: ");
-  Serial.println(currentTemperature);
-  delay(500);
-
-  {
-    display.clearDisplay();
-    {
-      // Current temperature
-      display.fillCircle(display.width() / 2, display.height() / 2, 31, WHITE);
-      display.setTextColor(BLACK, WHITE);
-      display.setTextSize(2);
-      display.setCursor(34, 24);
-      display.print(currentTemperature);
-    }
-
-    {
-      // Setup tempereture
-      display.setTextColor(WHITE);
-      display.setTextSize(1);
-      display.setCursor(0, 0);
-      display.print(setupTemperature);
-    }
-    display.display();
-  }
+  handleEncoder();
+  updateTemperature();
+  renderUI();
 }
 
-void handleInterrupted() {
+void handleEncoder() {
+  long deltaTime = millis() - requestEncoderTime;
+  if (deltaTime < ENCODER_MIN_DITHER_DURATION || deltaTime > ENCODER_MAX_DITHER_DURATION) {
+    return;
+  }
+    
   byte leftPin  = digitalRead(ENCODER_LEFT_PIN);
   byte rightPin = digitalRead(ENCODER_RIGHT_PIN);
   if ((leftPin == HIGH && rightPin == HIGH) || (leftPin == LOW && rightPin == LOW)) {
     DECREASE; // - <- +
+    REQUEST_RENDER;
   } else {
     INCREASE; // - -> +
+    REQUEST_RENDER;
   }
   setupTemperature = setupTemperature < LOW_LIMIT ? LOW_LIMIT : setupTemperature;
+}
+
+void updateTemperature() {
+  long currentTime = millis();
+  if (currentTime - updateTemperatureTime < TEMPERATURE_INTERVAL) {
+    return;
+  } else {
+    updateTemperatureTime = currentTime;
+  }
+
+  sensor.requestTemperatures();
+  float temperature = sensor.getTempCByIndex(0);
+  if (temperature != currentTemperature) {
+    currentTemperature = temperature;
+    if (setupTemperature <= UNREACHABLE) {
+      setupTemperature = currentTemperature;
+    }
+    if (currentTemperature >= setupTemperature) {
+      digitalWrite(FREEZER_PIN, HIGH);
+    } else if (currentTemperature <= setupTemperature - RETENTION) {
+      digitalWrite(FREEZER_PIN, LOW);
+    }
+
+    REQUEST_RENDER;
+    Serial.print("Temperatures: ");
+    Serial.println(currentTemperature);
+  }
+}
+
+void renderUI() {
+  if (!isRequestRender) {
+    return;
+  } else {
+    isRequestRender = false;
+  }
+
+  display.clearDisplay();
+  {
+    // Current temperature
+    display.fillCircle(display.width() / 2, display.height() / 2, 31, WHITE);
+    display.setTextColor(BLACK, WHITE);
+    display.setTextSize(2);
+    display.setCursor(34, 24);
+    display.print(currentTemperature);
+  }
+
+  {
+    // Setup tempereture
+    display.setTextColor(WHITE);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print(setupTemperature);
+  }
+  display.display();
+}
+
+void handleInterrupted() {
+  requestEncoderTime = millis();
 }
 
 void handleRoot() {
