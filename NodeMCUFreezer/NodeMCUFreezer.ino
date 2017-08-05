@@ -1,19 +1,20 @@
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>
 #include <gfxfont.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
-#include <OneWire.h>
-#include <DallasTemperature.h>
+#include "NetSettingManager.h"
 
 #define DISPLAY_RESET_PIN           15
 #define SERIAL_RATE                 9600
 #define FREEZER_PIN                 16
 #define DS18020_PIN                 14
-#define ENCODER_LEFT_PIN            12
-#define ENCODER_RIGHT_PIN           13
+#define ENCODER_LEFT_PIN            13
+#define ENCODER_RIGHT_PIN           12
 #define INCREASE                    {setupTemperature += TEMPERATURE_STEP;}
 #define DECREASE                    {setupTemperature -= TEMPERATURE_STEP;}
 #define REQUEST_RENDER              {isRequestRender = true;}
@@ -22,21 +23,19 @@
 #define UNREACHABLE                 -274.0f
 #define LOW_LIMIT                   -5.0f
 #define TEMPERATURE_INTERVAL        500
-#define ENCODER_MIN_DITHER_DURATION 3
-#define ENCODER_MAX_DITHER_DURATION 10
 
 const char *ssid     = "ESP_FREEZER";
 const char *password = "j989mik7!";
 
-long               updateTemperatureTime(0);
+unsigned long      updateTemperatureTime(0);
 volatile float     setupTemperature(UNREACHABLE);
 volatile float     currentTemperature(0);
 boolean            isRequestRender(true);
-volatile long      requestEncoderTime(0);
 OneWire            oneWire(DS18020_PIN);
 DallasTemperature  sensor(&oneWire);
 Adafruit_SSD1306   display(DISPLAY_RESET_PIN);
 ESP8266WebServer server(80);
+NetSettingManager  netSettingManager(ssid);
 
 void handleRoot();
 void handleInterrupted();
@@ -52,7 +51,7 @@ void setup() {
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
   display.display();
-
+ 
   WiFi.softAP(ssid, password);
   IPAddress myIP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -66,22 +65,19 @@ void setup() {
   pinMode(ENCODER_RIGHT_PIN, INPUT_PULLUP);
   pinMode(FREEZER_PIN, OUTPUT);
   digitalWrite(FREEZER_PIN, LOW);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_PIN), handleInterrupted, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_PIN), handleInterrupted, RISING);
+
+  netSettingManager.begin();
 }
 
 void loop() {
-  server.handleClient();
-  handleEncoder();
-  updateTemperature();
+  netSettingManager.handleNetwork();
+  //updateTemperature();
   renderUI();
+  yield();  
 }
 
 void handleEncoder() {
-  long deltaTime = millis() - requestEncoderTime;
-  if (deltaTime < ENCODER_MIN_DITHER_DURATION || deltaTime > ENCODER_MAX_DITHER_DURATION) {
-    return;
-  }
-    
   byte leftPin  = digitalRead(ENCODER_LEFT_PIN);
   byte rightPin = digitalRead(ENCODER_RIGHT_PIN);
   if ((leftPin == HIGH && rightPin == HIGH) || (leftPin == LOW && rightPin == LOW)) {
@@ -149,7 +145,7 @@ void renderUI() {
 }
 
 void handleInterrupted() {
-  requestEncoderTime = millis();
+  handleEncoder();
 }
 
 void handleRoot() {
